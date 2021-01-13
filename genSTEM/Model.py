@@ -242,7 +242,7 @@ def add_ac_noise(shape, strength=0.5, dwelltime=1e-6, ac_freq=50):
     ).reshape(shape)
     return noise
     
-def add_drift(XYshape, drift_vector = [1,0], drift_speed=1e-4):
+def add_drift_per_pixel(XYshape, drift_vector = [1,0], drift_speed=1e-4):
     '''Provide the pixel cordinate shift as a result of drift.
     
     Paramaters
@@ -264,7 +264,46 @@ def add_drift(XYshape, drift_vector = [1,0], drift_speed=1e-4):
     drift_vector = -cp.array(drift_vector)
     probe_indices = cp.arange(cp.prod(cp.array(XYshape))).reshape(XYshape)
     return (drift_speed * drift_vector * probe_indices.T[..., None]).T
+
+def drift_to_transform(XYshape, drift_vector = [1,0], drift_speed=1e-4):
+    '''Calculates the transformation matrix given a drift vector and strength.
     
+    Paramaters
+    ----------
+    XYshape: tuple of int
+        Shape of the probe positions. (2, X, Y)
+    drift_vector: length-2 vector
+        Direction of drift.
+    drift_speed: float
+        Drift speed in number of pixels.
+        Automatically divided by total number of images pixels within the function.
+        Should be 0-10.
+    
+    Returns
+    -------
+    Transformation matrix.
+    '''
+    Nxy = np.prod(XYshape)
+    drift = drift_speed/Nxy * -cp.array([drift_vector]).T
+    shear = cp.array([1,XYshape[0]])[None,...]
+    return drift*shear
+
+def add_drift(XY, T):
+    '''Provide the pixel cordinate shift as a result of drift using a transformation matrix.
+    
+    Paramaters
+    ----------
+    XY: ndarray of float, int
+        Probe positions.
+    T: ndarray of float
+        Transformation matrix.
+    Returns
+    -------
+    ndarray of pixel shift after drift.
+    '''
+    XYshape = XY.shape[1:]
+    Nxy = np.prod(XYshape)
+    return (T @ XY.reshape((2,Nxy))).reshape(2, *XYshape)
 
 def add_line_jitter(XYshape, strength = 0.3, horizontal=True, vertical=False, ):
     '''Shift pixel rows and columns to simulate jittering in a STEM image.
@@ -417,10 +456,12 @@ class ImageModel:
                 cp.asarray(rotation_matrix(self.scan_rotation)) @ (
                     self.probe_positions.reshape((2, -1)) - mean) + mean
             ).reshape((2, *XYshape[1:]))
-
+        
+        #TODO: apply T_drift with scipy.afine_transform so that the atoms wrap throught the image
         if self.drift_speed:
             #speed = self.drift_speed / np.prod(XYshape[1:])
-            drift = add_drift(XYshape[1:], self.drift_vector, self.drift_speed)
+            T_drift = drift_to_transform(XYshape[1:], self.drift_vector, self.drift_speed)
+            drift = add_drift(self.probe_positions, T_drift)
             self.probe_positions += drift
             
             if self.centre_drift:
